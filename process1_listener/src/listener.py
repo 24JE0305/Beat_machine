@@ -114,7 +114,8 @@ async def run_process1(
 
             backoff = backoff_base 
 
-        except* ConnectionClosed:
+        except* ConnectionClosed as eg:
+            print(f"Supervisor Triggered Reconnect: {eg.exceptions[0]}")
             # Broadcast STALE=True on disconnect, do not wait for TTL
             for inst_id in instruments:
                 await redis_writer.write(inst_id, b"", stale=True)

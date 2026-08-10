@@ -5,5 +5,6 @@ pluggy==1.6.0
 Pygments==2.20.0
 pytest==9.1.1
 pytest-asyncio==1.4.0
+python-dotenv==1.2.2
 redis==8.1.0
 websockets==17.0.1
