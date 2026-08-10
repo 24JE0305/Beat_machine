@@ -71,6 +71,7 @@ class FakeTransport:
         self.snapshot_delay: float = 0.0
         self.snapshot_raises_timeout: bool = False
         self.hang_recv: bool = False
+        self.send_hangs: bool = False
         self.closed = False
 
     def queue_message(self, msg: dict) -> None:
@@ -100,6 +101,10 @@ class FakeTransport:
         return await self._inbox.get()
 
     async def send(self, msg: dict) -> None:
+        if self.send_hangs:
+            # simulate a full OS send buffer on a half-open TCP connection --
+            # send() never completes on its own, must be cancelled externally
+            await asyncio.Event().wait()
         self.sent.append(msg)
 
     async def request_snapshot(self) -> dict:

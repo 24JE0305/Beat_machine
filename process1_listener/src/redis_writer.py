@@ -2,26 +2,38 @@
 redis_writer.py — Batches book state from an in-memory queue into Redis,
 per spec §7.
 
-Correctness fix applied here (from Gemini review, validated as a real
-bug): the spec's §7 describes TWO separate keys — the book blob and the
-STALE flag. Written as two separate Redis calls, there's a window where
-Process 2 can read a cleared STALE flag against a not-yet-updated book,
-or an updated book against a stale STALE=True that hasn't cleared yet.
+Correctness fix (round 2, Gemini review, validated real): the spec's §7
+describes TWO separate keys — book blob and STALE flag. Written as two
+separate Redis calls, there's a window where Process 2 can read a
+cleared STALE flag against a not-yet-updated book. Fixed via a single
+MULTI/EXEC pipeline transaction per write.
 
-Fix: every write is wrapped in a single MULTI/EXEC pipeline transaction,
-so Process 2 can never observe a state where one changed and the other
-didn't. This is the minimal correct fix — NOT the shared-memory seqlock
-Gemini also proposed, which is real but premature (see reply to Gemini:
-profile first, this is not yet a measured bottleneck).
+Resilience fix (round 3, Gemini review, validated real): drain() had no
+error handling around write() — a transient Redis outage (connection
+drop, timeout, Redis restart mid-session) would raise RedisError,
+uncaught, crashing the task inside the Global Supervisor's TaskGroup.
+Since RedisError doesn't subclass transport.ConnectionClosed, the
+supervisor's `except* ConnectionClosed` wouldn't catch it, and the whole
+process would die instead of entering backoff. This is spec §9's own
+test harness requirement ("Redis unreachable mid-session -> book writes
+fail gracefully, doesn't crash the listener") that had gone unimplemented.
 
-TTL (§7): set on every write, so a hard-dead Process 1 (crashed without
-raising a catchable exception) results in the key silently expiring
-rather than Process 2 reading stale-but-present data forever.
+Deliberately NOT fixed by converting RedisError -> ConnectionClosed (the
+originally suggested fix): that would make the Global Supervisor tear
+down and fully re-handshake the broker connection on every Redis blip,
+conflating two independent failure domains. Instead, write()/clear()
+catch RedisError internally, log it, and swallow it — drain() keeps
+running, heartbeat_loop/delta_loop are completely undisturbed, the local
+book keeps updating in memory, and Process 2 stays protected via the
+book key's TTL expiring naturally while writes are failing.
 """
 
 import asyncio
+import logging
 import msgpack
 import redis.asyncio as aioredis
+
+logger = logging.getLogger(__name__)
 
 
 class RedisWriter:
@@ -44,28 +56,52 @@ class RedisWriter:
 
     async def write(self, instrument_id: str, book_blob: bytes, stale: bool) -> None:
         """Atomic write of book blob + stale flag. Single round trip,
-        single transaction — Process 2 can never see a half-updated pair."""
+        single transaction — Process 2 can never see a half-updated pair.
+
+        Deliberately does NOT raise on Redis-level failures (connection
+        drop, timeout, Redis restart mid-session). This is per spec §9's
+        own test harness requirement: "Redis unreachable mid-session ->
+        book writes fail gracefully, doesn't crash the listener." A
+        RedisError here is a DIFFERENT failure domain than the broker
+        WebSocket dying (transport.ConnectionClosed) — converting it to
+        ConnectionClosed and letting the Global Supervisor catch it would
+        tear down and fully re-handshake a perfectly healthy broker
+        connection just because Redis blipped. Instead: log it, drop this
+        one write, let drain() keep consuming the queue undisturbed.
+        Process 2 stays protected regardless, via the book key's TTL
+        expiring naturally while writes are failing."""
         if self._client is None:
             raise RuntimeError("RedisWriter.connect() must be called first")
 
         book_key = f"{self._book_key_prefix}:{instrument_id}"
         stale_key = f"{self._stale_key_prefix}:{instrument_id}"
 
-        async with self._client.pipeline(transaction=True) as pipe:
-            pipe.set(book_key, book_blob, px=self._ttl_ms)
-            pipe.set(stale_key, b"1" if stale else b"0", px=self._ttl_ms)
-            await pipe.execute()
+        try:
+            async with self._client.pipeline(transaction=True) as pipe:
+                pipe.set(book_key, book_blob, px=self._ttl_ms)
+                pipe.set(stale_key, b"1" if stale else b"0", px=self._ttl_ms)
+                await pipe.execute()
+        except aioredis.RedisError as e:
+            logger.error("Redis write failed for %s, dropping this update: %s", instrument_id, e)
 
     async def clear(self, instrument_id: str) -> None:
         """Called by the Global Supervisor on reconnect — per spec §2,
         'ConnectionClosed anywhere -> clear Redis'. Deletes both keys
         outright rather than leaving stale data for the TTL to expire,
-        since Process 2 should stop trading the instant, not TTL-later."""
+        since Process 2 should stop trading the instant, not TTL-later.
+
+        Also does not raise on RedisError, for the same reason as
+        write() — a failure here shouldn't interrupt the Global
+        Supervisor's reconnect flow. If Redis is unreachable, the keys
+        will naturally expire via TTL regardless."""
         if self._client is None:
             return
         book_key = f"{self._book_key_prefix}:{instrument_id}"
         stale_key = f"{self._stale_key_prefix}:{instrument_id}"
-        await self._client.delete(book_key, stale_key)
+        try:
+            await self._client.delete(book_key, stale_key)
+        except aioredis.RedisError as e:
+            logger.error("Redis clear() failed for %s (keys will expire via TTL): %s", instrument_id, e)
 
     async def drain(self, queue: asyncio.Queue) -> None:
         """

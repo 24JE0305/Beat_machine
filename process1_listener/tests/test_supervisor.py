@@ -73,3 +73,46 @@ async def test_supervisor_reconnects_on_silent_heartbeat_death_and_clears_redis(
 
     await client.aclose()
     await writer.close()
+
+@pytest.mark.asyncio
+async def test_redis_outage_does_not_trigger_broker_reconnect():
+    """Core architectural claim behind the round-3 fix: a Redis outage
+    must NOT cause the Global Supervisor to re-handshake the broker.
+    connect_count stays at 1 even while every Redis write fails, and the
+    book keeps updating correctly in memory the whole time."""
+    book = OrderBook("NIFTY")
+    transport = CountingTransport()
+    transport.set_snapshot({"bids": [(100.0, 1.0)], "asks": [(100.5, 1.0)], "seq": 1})
+    transport.queue_messages([
+        {"type": "delta", "seq": 2, "side": "bid", "level": 0, "price": 101.0, "qty": 5.0},
+        {"type": "delta", "seq": 3, "side": "bid", "level": 1, "price": 100.9, "qty": 6.0},
+    ])
+
+    dead_writer = RedisWriter(redis_url="redis://127.0.0.1:1", ttl_ms=5000)
+    try:
+        await dead_writer.connect()
+    except Exception:
+        pass
+
+    run_task = asyncio.create_task(
+        run_process1(
+            transport,
+            book,
+            dead_writer,
+            instrument_id="NIFTY",
+            instruments=["NIFTY"],
+            backoff_base=0.05,
+            backoff_max=0.1,
+        )
+    )
+
+    await asyncio.sleep(0.3)
+    run_task.cancel()
+    try:
+        await run_task
+    except asyncio.CancelledError:
+        pass
+
+    assert transport.connect_count == 1, "Redis being down must not trigger any broker reconnect"
+    assert book.get_level("bid", 0) == (101.0, 5.0), "book must keep updating even while Redis writes fail"
+    assert book.get_level("bid", 1) == (100.9, 6.0)
