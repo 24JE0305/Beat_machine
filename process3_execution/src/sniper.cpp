@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <cstdint>
 #include <string>
+#include <chrono>
+#include <iomanip>
 #include <fstream>
 #include <sstream>
 #include <curl/curl.h>
@@ -145,12 +147,16 @@ int main()
     {
         if (signal->fire_order)
         {
-            std::cout << "\n[PAPER TRADE] BUY " << signal->target_qty
+            // Get current time with millisecond precision
+            auto now = std::chrono::system_clock::now();
+            auto in_time_t = std::chrono::system_clock::to_time_t(now);
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+
+            std::cout << "\n[" << std::put_time(std::localtime(&in_time_t), "%H:%M:%S")
+                      << "." << std::setfill('0') << std::setw(3) << ms.count() << "] "
+                      << "[PAPER TRADE] BUY " << signal->target_qty
                       << " shares of ID: " << signal->security_id
                       << " at price: " << signal->target_price << std::endl;
-
-            // FIX: Pass the dynamic security_id to the execution function
-            // execute_dhan_order(signal->security_id, signal->target_price, signal->target_qty);
 
             sleep(1);
         }

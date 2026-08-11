@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 .env
 *.log
+yolov8_orderbook.onnx
+yolov8n.pt

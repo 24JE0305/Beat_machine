@@ -54,7 +54,18 @@ class OrderflowLogger:
 
 async def main():
     # Make sure this list exactly matches Process 2!
-    target_stocks = ["1333", "11915", "3456", "13538"] 
+    target_stocks = [
+        "1333",   # HDFC BANK
+        "2885",   # RELIANCE
+        "11536",  # TCS
+        "1594",   # INFOSYS
+        "4963",   # ICICI BANK
+        "3045",   # SBI (STATE BANK OF INDIA)
+        "3456",   # TATA MOTORS
+        "1922",   # KOTAK MAHINDRA BANK
+        "11483",  # LT (LARSEN & TOUBRO)
+        "11915",  # YES BANK
+    ]
     logger = OrderflowLogger(instrument_ids=target_stocks)
     await logger.record_stream()
 

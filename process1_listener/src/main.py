@@ -24,12 +24,17 @@ async def main():
     # 3. The 20 instruments you want to track
     # Replace these examples with the actual Security IDs from the Dhan Scrip Master
     instruments = [
-        "1333",   # HDFC Bank
-        "2885",   # Reliance
-        "3456",   # Tata Motors
-        "11915",  # YES Bank
-        # ... add all 20 of your target stocks here
-    ] 
+        "1333",   # HDFC BANK
+        "2885",   # RELIANCE
+        "11536",  # TCS
+        "1594",   # INFOSYS
+        "4963",   # ICICI BANK
+        "3045",   # SBI (STATE BANK OF INDIA)
+        "3456",   # TATA MOTORS
+        "1922",   # KOTAK MAHINDRA BANK
+        "11483",  # LT (LARSEN & TOUBRO)
+        "11915",  # YES BANK
+    ]
     
     # 4. Initialize the architecture
     transport = DhanTransport(client_id, access_token)
