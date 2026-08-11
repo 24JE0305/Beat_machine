@@ -19,37 +19,39 @@ class OrderflowLogger:
         if not os.path.exists(self.filename):
             with open(self.filename, mode='w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(["Timestamp", "SecurityId", "Best_Bid_Price", "Best_Bid_Qty", "Best_Ask_Price", "Best_Ask_Qty"])
+                writer.writerow(["Timestamp", "SecurityId", "Best_Bid_Price", "Best_Bid_Qty", "Best_Ask_Price", "Best_Ask_Qty", "Stale"])
 
     async def record_stream(self):
         print(f"Process 4 Logger started. Tracking {len(self.instrument_ids)} stocks into {self.filename}...")
-        
+
         while True:
             batch_rows = []
-            
+
             # Scan the Redis queue for all requested stocks
             for sec_id in self.instrument_ids:
                 book_key = f"book:{sec_id}"
-                book_blob = await self.redis.get(book_key)
-                
+                stale_key = f"stale:{sec_id}"
+                stale_flag, book_blob = await self.redis.mget([stale_key, book_key])
+
                 if book_blob:
                     book_data = msgpack.unpackb(book_blob, raw=False)
                     best_bid = book_data["bids"][0] if book_data["bids"] else (0.0, 0)
                     best_ask = book_data["asks"][0] if book_data["asks"] else (0.0, 0)
-                    
+
                     batch_rows.append([
                         datetime.now().isoformat(),
                         sec_id,
                         best_bid[0], best_bid[1],
-                        best_ask[0], best_ask[1]
+                        best_ask[0], best_ask[1],
+                        stale_flag == b"1",
                     ])
-            
+
             # Write the entire batch to the CSV at once for maximum I/O speed
             if batch_rows:
                 with open(self.filename, mode='a', newline='') as f:
                     writer = csv.writer(f)
                     writer.writerows(batch_rows)
-            
+
             await asyncio.sleep(1.0)
 
 async def main():

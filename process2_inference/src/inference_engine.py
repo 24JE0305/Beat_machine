@@ -118,7 +118,12 @@ async def main():
     model_path = os.path.join(base_dir, "../yolov8_orderbook.onnx")  # Adjust if placed directly in process2_inference/
     
     engine = InferenceEngine(model_path=model_path, instrument_ids=target_stocks)
-    await engine.run_loop()
+    try:
+        await engine.run_loop()
+    except asyncio.CancelledError:
+        pass
+    finally:
+        engine.bridge.deactivate()
 
 if __name__ == "__main__":
     try:

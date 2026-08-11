@@ -34,6 +34,7 @@ class MemoryBridge:
         
         if create:
             self.disarm()
+            self.signal.is_active = True
 
     def arm_and_fire(self, security_id: int, price: float, qty: int):
         self.signal.security_id = security_id
@@ -45,7 +46,10 @@ class MemoryBridge:
         self.signal.fire_order = False
         self.signal.target_price = 0.0
         self.signal.target_qty = 0
-        self.signal.is_active = True
+
+    def deactivate(self):
+        """Call on shutdown so the C++ sniper exits cleanly."""
+        self.signal.is_active = False
 
     def close(self):
         # 1. Destroy the reference to the C-pointer

@@ -1,16 +1,28 @@
-"""
-listener.py — Process 1's concurrency core for Dhan Full-Refresh feed.
-"""
 import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, time as dtime
+from zoneinfo import ZoneInfo
 
 from orderbook import OrderBook
 from transport import Transport, ConnectionClosed
 from redis_writer import RedisWriter, serialize_book
 
 logger = logging.getLogger(__name__)
+
+IST = ZoneInfo("Asia/Kolkata")
+MARKET_OPEN = dtime(9, 15)
+MARKET_CLOSE = dtime(15, 30)
+MARKET_POLL_SECONDS = 30.0
+
+
+def is_market_open(now: datetime | None = None) -> bool:
+    """NSE cash session gate: Mon-Fri, 09:15-15:30 IST."""
+    now = now or datetime.now(IST)
+    if now.weekday() >= 5:
+        return False
+    return MARKET_OPEN <= now.time() <= MARKET_CLOSE
 
 @dataclass
 class ConnectionHealth:
@@ -91,6 +103,10 @@ async def run_process1(
     backoff = backoff_base
 
     while True:
+        if not is_market_open():
+            await asyncio.sleep(MARKET_POLL_SECONDS)
+            continue
+
         try:
             # Phase 1: Connect & Subscribe (Auth is in WSS URL now)
             await transport.connect()

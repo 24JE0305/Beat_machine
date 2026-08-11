@@ -166,6 +166,8 @@ int main()
             std::cout << "Process 2 disconnected. Shutting down sniper." << std::endl;
             break;
         }
+
+        usleep(200);
     }
 
     munmap(ptr, sizeof(ExecutionSignal));
