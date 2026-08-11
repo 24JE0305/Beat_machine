@@ -21,21 +21,29 @@ async def main():
         print("ERROR: Missing DHAN_CLIENT_ID or DHAN_ACCESS_TOKEN in .env file.")
         sys.exit(1)
     
-    # 3. The instruments you want to track
-    instruments = ["1333"] 
+    # 3. The 20 instruments you want to track
+    # Replace these examples with the actual Security IDs from the Dhan Scrip Master
+    instruments = [
+        "1333",   # HDFC Bank
+        "2885",   # Reliance
+        "3456",   # Tata Motors
+        "11915",  # YES Bank
+        # ... add all 20 of your target stocks here
+    ] 
     
     # 4. Initialize the architecture
     transport = DhanTransport(client_id, access_token)
     redis_writer = RedisWriter() 
     
     # 5. Create an OrderBook for every instrument we are tracking
+    # This automatically spawns 20 independent memory queues
     book_map = {inst: OrderBook(inst) for inst in instruments}
     
     # 6. Connect Redis and start the system
     print("Connecting to Redis...")
     await redis_writer.connect()
     
-    print("Starting Process 1 Global Supervisor...")
+    print(f"Starting Process 1 Global Supervisor for {len(instruments)} stocks...")
     await run_process1(transport, book_map, redis_writer, instruments)
 
 if __name__ == "__main__":

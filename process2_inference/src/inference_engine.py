@@ -8,8 +8,8 @@ from memory_bridge import MemoryBridge
 from tensor_transformer import TensorTransformer
 
 class InferenceEngine:
-    def __init__(self, model_path: str, instrument_id: str):
-        self.instrument_id = instrument_id
+    def __init__(self, model_path: str, instrument_ids: list):
+        self.instrument_ids = instrument_ids
         
         # 1. Initialize Infrastructure
         self.redis = aioredis.from_url("redis://127.0.0.1:6379")
@@ -18,58 +18,72 @@ class InferenceEngine:
         
         # 2. Load the YOLO ONNX Model
         print(f"Loading ONNX model from {model_path}...")
-        # self.session = ort.InferenceSession(model_path)
-        # self.input_name = self.session.get_inputs()[0].name
+        self.session = ort.InferenceSession(model_path)
+        self.input_name = self.session.get_inputs()[0].name
         
+    def _parse_yolov8_output(self, predictions: np.ndarray, conf_threshold: float = 0.85) -> bool:
+        """
+        Parses the raw tensor output from a YOLOv8 ONNX model.
+        Assumes a single-class model where class 0 is 'spoof_trap'.
+        """
+        # YOLOv8 standard output shape: (batch_size, 4 + num_classes, num_anchors)
+        # For 1 class, it typically looks like (1, 5, 8400)
+        preds = predictions[0] 
+        
+        # Rows 0-3 are bounding box coordinates (x, y, w, h)
+        # Row 4 contains the confidence scores for Class 0 across all anchors
+        class_scores = preds[4, :] 
+        
+        # If the highest confidence detection beats our threshold, trigger the sniper
+        if np.max(class_scores) > conf_threshold:
+            return True
+            
+        return False
+
     async def run_loop(self):
-        book_key = f"book:{self.instrument_id}"
-        stale_key = f"stale:{self.instrument_id}"
-        
-        print(f"Process 2 ONNX Engine listening for {self.instrument_id}...")
+        print(f"Process 2 ONNX Engine listening for {len(self.instrument_ids)} stocks...")
         
         while True:
-            # 1. Fetch both keys in a single network call for speed
-            keys = await self.redis.mget([stale_key, book_key])
-            stale_flag, book_blob = keys[0], keys[1]
-            
-            # If connection dropped or no data, do not trade
-            if stale_flag == b"1" or not book_blob:
-                await asyncio.sleep(0.001)
-                continue
+            # Scan all stocks continuously 
+            for sec_id in self.instrument_ids:
+                book_key = f"book:{sec_id}"
+                stale_key = f"stale:{sec_id}"
                 
-            # 2. Unpack the binary data
-            book_data = msgpack.unpackb(book_blob, raw=False)
-            
-            # 3. Transform to 2D Spatial Heatmap
-            heatmap = self.transformer.create_heatmap(book_data["bids"], book_data["asks"])
-            
-            # 4. Reshape for YOLO (Batch=1, Channel=1, Height=40, Width=2)
-            input_tensor = heatmap.reshape(1, 1, 40, 2).astype(np.float32)
-            
-            # 5. Execute YOLO Inference (Uncomment when model is ready)
-            # outputs = self.session.run(None, {self.input_name: input_tensor})
-            # spoof_detected = self._parse_yolo_output(outputs)
-            
-            spoof_detected = False # Placeholder
-            
-            # 6. The Sniper Trigger
-            if spoof_detected:
-                best_ask_price = book_data["asks"][0][0]
-                print(f"TRAP DETECTED! Firing sniper at {best_ask_price}")
+                keys = await self.redis.mget([stale_key, book_key])
+                stale_flag, book_blob = keys[0], keys[1]
                 
-                # Instantly flip the byte in physical RAM. C++ sees this in 1 nanosecond.
-                self.bridge.arm_and_fire(price=best_ask_price, qty=100)
+                if stale_flag == b"1" or not book_blob:
+                    continue
+                    
+                # Unpack and transform...
+                book_data = msgpack.unpackb(book_blob, raw=False)
+                heatmap = self.transformer.create_heatmap(book_data["bids"], book_data["asks"])
+                input_tensor = heatmap.reshape(1, 1, 40, 2).astype(np.float32)
                 
-                # Sleep to prevent firing 10,000 times a second on the same signal
-                await asyncio.sleep(1.0)
-                self.bridge.disarm()
+                # Run ONNX Inference
+                ort_inputs = {self.input_name: input_tensor}
+                ort_outs = self.session.run(None, ort_inputs)
+                
+                # Parse the tensor array
+                spoof_detected = self._parse_yolov8_output(ort_outs[0], conf_threshold=0.85)
+                
+                if spoof_detected:
+                    best_ask_price = book_data["asks"][0][0]
+                    print(f"TRAP DETECTED on {sec_id}! Firing paper trade...")
+                    
+                    # Pass the specific security_id to physical RAM
+                    self.bridge.arm_and_fire(security_id=int(sec_id), price=best_ask_price, qty=100)
+                    
+                    # Pause briefly to prevent the sniper from double-firing on the exact same frame
+                    await asyncio.sleep(1.0)
+                    self.bridge.disarm()
             
-            # Yield to the event loop so we don't lock up a single CPU core at 100%
-            await asyncio.sleep(0.001) 
+            await asyncio.sleep(0.001)
 
 async def main():
-    # We will point this to your actual .onnx file later
-    engine = InferenceEngine(model_path="yolov8_orderbook.onnx", instrument_id="1333")
+    # Pick your Security IDs from the Dhan Scrip Master CSV
+    target_stocks = ["1333", "11915", "3456", "13538"] 
+    engine = InferenceEngine(model_path="yolov8_orderbook.onnx", instrument_ids=target_stocks)
     await engine.run_loop()
 
 if __name__ == "__main__":

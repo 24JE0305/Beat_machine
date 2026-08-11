@@ -4,11 +4,13 @@ from multiprocessing import shared_memory
 # This is the exact C-struct memory layout that our C++ sniper will read.
 # 1 byte for the trigger flag, 8 bytes for the execution price, 4 bytes for quantity.
 class ExecutionSignal(ctypes.Structure):
+    _pack_ = 1
     _fields_ = [
-        ("fire_order", ctypes.c_bool),      # 1 byte: 0 = Wait, 1 = FIRE!
-        ("target_price", ctypes.c_double),  # 8 bytes: Limit price to shoot at
-        ("target_qty", ctypes.c_uint32),    # 4 bytes: How many shares
-        ("is_active", ctypes.c_bool)        # 1 byte: Is Process 2 alive?
+        ("fire_order", ctypes.c_bool),
+        ("security_id", ctypes.c_uint32),   # NEW: 4 bytes for the Stock ID
+        ("target_price", ctypes.c_double),  
+        ("target_qty", ctypes.c_uint32),    
+        ("is_active", ctypes.c_bool)        
     ]
 
 class MemoryBridge:
@@ -33,11 +35,11 @@ class MemoryBridge:
         if create:
             self.disarm()
 
-    def arm_and_fire(self, price: float, qty: int):
-        """Called by YOLOv8 when a spoofing trap is detected."""
+    def arm_and_fire(self, security_id: int, price: float, qty: int):
+        self.signal.security_id = security_id
         self.signal.target_price = price
         self.signal.target_qty = qty
-        self.signal.fire_order = True  # C++ sniper sees this instantly
+        self.signal.fire_order = True
 
     def disarm(self):
         self.signal.fire_order = False
@@ -46,6 +48,14 @@ class MemoryBridge:
         self.signal.is_active = True
 
     def close(self):
+        # 1. Destroy the reference to the C-pointer
+        self.signal = None 
+        
+        # 2. Force Python's Garbage Collector to instantly wipe it from RAM
+        import gc
+        gc.collect() 
+        
+        # 3. Now it is safe to close the memory block
         self.shm.close()
         try:
             self.shm.unlink()

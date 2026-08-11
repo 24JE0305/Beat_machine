@@ -13,6 +13,7 @@
 struct ExecutionSignal
 {
     bool fire_order;
+    uint32_t security_id; // MUST MATCH PYTHON EXACTLY
     double target_price;
     uint32_t target_qty;
     bool is_active;
@@ -22,7 +23,6 @@ struct ExecutionSignal
 // Global variables to hold secure credentials
 std::string dhan_client_id = "";
 std::string dhan_access_token = "";
-const std::string SECURITY_ID = "1333";
 
 void load_env(const std::string &filepath)
 {
@@ -43,7 +43,6 @@ void load_env(const std::string &filepath)
             std::string value;
             if (std::getline(is_line, value))
             {
-                // Strip quotes if they exist in the .env file
                 if (value.size() >= 2 && value.front() == '"' && value.back() == '"')
                 {
                     value = value.substr(1, value.size() - 2);
@@ -57,7 +56,8 @@ void load_env(const std::string &filepath)
     }
 }
 
-void execute_dhan_order(double price, uint32_t qty)
+// FIX: Added uint32_t sec_id as the first parameter
+void execute_dhan_order(uint32_t sec_id, double price, uint32_t qty)
 {
     CURL *curl;
     CURLcode res;
@@ -73,6 +73,7 @@ void execute_dhan_order(double price, uint32_t qty)
         headers = curl_slist_append(headers, auth_header.c_str());
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
+        // FIX: Dynamically convert sec_id to string for the JSON payload
         std::string json_payload = "{"
                                    "\"dhanClientId\":\"" +
                                    dhan_client_id + "\","
@@ -83,8 +84,8 @@ void execute_dhan_order(double price, uint32_t qty)
                                                     "\"orderType\":\"LIMIT\","
                                                     "\"validity\":\"DAY\","
                                                     "\"securityId\":\"" +
-                                   SECURITY_ID + "\","
-                                                 "\"quantity\":" +
+                                   std::to_string(sec_id) + "\","
+                                                            "\"quantity\":" +
                                    std::to_string(qty) + ","
                                                          "\"disclosedQuantity\":0,"
                                                          "\"price\":" +
@@ -112,7 +113,6 @@ void execute_dhan_order(double price, uint32_t qty)
 
 int main()
 {
-    // Load credentials from the root .env file
     load_env("../.env");
     if (dhan_client_id.empty() || dhan_access_token.empty())
     {
@@ -145,10 +145,12 @@ int main()
     {
         if (signal->fire_order)
         {
-            std::cout << "\n[EXECUTE!] Firing " << signal->target_qty
-                      << " shares at price: " << signal->target_price << std::endl;
+            std::cout << "\n[PAPER TRADE] BUY " << signal->target_qty
+                      << " shares of ID: " << signal->security_id
+                      << " at price: " << signal->target_price << std::endl;
 
-            execute_dhan_order(signal->target_price, signal->target_qty);
+            // FIX: Pass the dynamic security_id to the execution function
+            // execute_dhan_order(signal->security_id, signal->target_price, signal->target_qty);
 
             sleep(1);
         }
