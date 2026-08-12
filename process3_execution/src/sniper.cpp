@@ -15,6 +15,7 @@
 struct ExecutionSignal
 {
     bool fire_order;
+    uint8_t side;         // 0 = BUY, 1 = SELL -- must match memory_bridge.py order exactly
     uint32_t security_id; // MUST MATCH PYTHON EXACTLY
     double target_price;
     uint32_t target_qty;
@@ -59,7 +60,7 @@ void load_env(const std::string &filepath)
 }
 
 // FIX: Added uint32_t sec_id as the first parameter
-void execute_dhan_order(uint32_t sec_id, double price, uint32_t qty)
+void execute_dhan_order(uint32_t sec_id, double price, uint32_t qty, uint8_t side)
 {
     CURL *curl;
     CURLcode res;
@@ -76,16 +77,19 @@ void execute_dhan_order(uint32_t sec_id, double price, uint32_t qty)
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
         // FIX: Dynamically convert sec_id to string for the JSON payload
+        const std::string transaction_type = (side == 1) ? "SELL" : "BUY";
+
         std::string json_payload = "{"
                                    "\"dhanClientId\":\"" +
                                    dhan_client_id + "\","
                                                     "\"correlationId\":\"yolo_sniper_01\","
-                                                    "\"transactionType\":\"BUY\","
-                                                    "\"exchangeSegment\":\"NSE_EQ\","
-                                                    "\"productType\":\"INTRADAY\","
-                                                    "\"orderType\":\"LIMIT\","
-                                                    "\"validity\":\"DAY\","
-                                                    "\"securityId\":\"" +
+                                                    "\"transactionType\":\"" +
+                                   transaction_type + "\","
+                                                      "\"exchangeSegment\":\"NSE_EQ\","
+                                                      "\"productType\":\"INTRADAY\","
+                                                      "\"orderType\":\"LIMIT\","
+                                                      "\"validity\":\"DAY\","
+                                                      "\"securityId\":\"" +
                                    std::to_string(sec_id) + "\","
                                                             "\"quantity\":" +
                                    std::to_string(qty) + ","
@@ -152,9 +156,11 @@ int main()
             auto in_time_t = std::chrono::system_clock::to_time_t(now);
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
 
+            const char *side_label = (signal->side == 1) ? "SELL" : "BUY";
+
             std::cout << "\n[" << std::put_time(std::localtime(&in_time_t), "%H:%M:%S")
                       << "." << std::setfill('0') << std::setw(3) << ms.count() << "] "
-                      << "[PAPER TRADE] BUY " << signal->target_qty
+                      << "[PAPER TRADE] " << side_label << " " << signal->target_qty
                       << " shares of ID: " << signal->security_id
                       << " at price: " << signal->target_price << std::endl;
 

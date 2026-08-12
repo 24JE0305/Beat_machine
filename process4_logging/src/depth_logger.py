@@ -28,7 +28,7 @@ class DepthLogger:
         self.instrument_ids = instrument_ids
         self.redis = aioredis.from_url("redis://127.0.0.1:6379")
         self.buffer = []
-        self.last_seq = {sec_id: -1 for sec_id in instrument_ids}
+        self.last_blob = {sec_id: None for sec_id in instrument_ids}
         os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     def flatten_snapshot(self, sec_id: str, book_data: dict, timestamp: float) -> dict:
@@ -90,12 +90,12 @@ class DepthLogger:
                     if stale_flag == b"1" or not book_blob:
                         continue
 
-                    book_data = msgpack.unpackb(book_blob, raw=False)
-                    seq = book_data.get("seq", 0)
-
-                    # Only record if orderbook state has updated
-                    if seq != self.last_seq[sec_id]:
-                        self.last_seq[sec_id] = seq
+                    # Compare raw bytes instead of seq (seq is always 0, ignored
+                    # per spec -- deduping on it meant recording one row per
+                    # stock ever, then silently nothing for the rest of the day).
+                    if book_blob != self.last_blob[sec_id]:
+                        self.last_blob[sec_id] = book_blob
+                        book_data = msgpack.unpackb(book_blob, raw=False)
                         row = self.flatten_snapshot(sec_id, book_data, time.time())
                         self.buffer.append(row)
 

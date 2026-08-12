@@ -1,13 +1,18 @@
 import ctypes
 from multiprocessing import shared_memory
 
+SIDE_BUY = 0
+SIDE_SELL = 1
+
 # This is the exact C-struct memory layout that our C++ sniper will read.
-# 1 byte for the trigger flag, 8 bytes for the execution price, 4 bytes for quantity.
+# Field ORDER and SIZES must match sniper.cpp's ExecutionSignal exactly --
+# this is raw shared memory, not a serialized format.
 class ExecutionSignal(ctypes.Structure):
     _pack_ = 1
     _fields_ = [
         ("fire_order", ctypes.c_bool),
-        ("security_id", ctypes.c_uint32),   # NEW: 4 bytes for the Stock ID
+        ("side", ctypes.c_uint8),           # 0 = BUY, 1 = SELL
+        ("security_id", ctypes.c_uint32),
         ("target_price", ctypes.c_double),  
         ("target_qty", ctypes.c_uint32),    
         ("is_active", ctypes.c_bool)        
@@ -36,16 +41,18 @@ class MemoryBridge:
             self.disarm()
             self.signal.is_active = True
 
-    def arm_and_fire(self, security_id: int, price: float, qty: int):
+    def arm_and_fire(self, security_id: int, price: float, qty: int, side: int = SIDE_BUY):
         self.signal.security_id = security_id
         self.signal.target_price = price
         self.signal.target_qty = qty
+        self.signal.side = side
         self.signal.fire_order = True
 
     def disarm(self):
         self.signal.fire_order = False
         self.signal.target_price = 0.0
         self.signal.target_qty = 0
+        self.signal.side = SIDE_BUY
 
     def deactivate(self):
         """Call on shutdown so the C++ sniper exits cleanly."""

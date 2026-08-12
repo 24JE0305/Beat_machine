@@ -6,3 +6,5 @@ __pycache__/
 *.log
 yolov8_orderbook.onnx
 yolov8n.pt
+data_capture/
+*.parquet

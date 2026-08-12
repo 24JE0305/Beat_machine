@@ -6,7 +6,7 @@ import numpy as np
 import redis.asyncio as aioredis
 import onnxruntime as ort
 
-from memory_bridge import MemoryBridge
+from memory_bridge import MemoryBridge, SIDE_BUY, SIDE_SELL
 from tensor_transformer import TensorTransformer
 
 class InferenceEngine:
@@ -123,8 +123,10 @@ class InferenceEngine:
                         best_bid_price = book_data["bids"][0][0]
                         print(f"[{time.strftime('%H:%M:%S')}] EXIT TRAP on {sec_id}! Reason: {reason} | Exiting at {best_bid_price}")
                         
-                        # Fire Exit Order (For short-duration paper trading / closing the leg)
-                        self.bridge.arm_and_fire(security_id=int(sec_id), price=best_bid_price, qty=2000)
+                        # Fire Exit Order -- SIDE_SELL. This used to call arm_and_fire
+                        # with no side, identical to an entry BUY as far as the
+                        # sniper (or any real order placement) could tell.
+                        self.bridge.arm_and_fire(security_id=int(sec_id), price=best_bid_price, qty=2000, side=SIDE_SELL)
                         await asyncio.sleep(0.1)
                         self.bridge.disarm()
                         
@@ -146,7 +148,7 @@ class InferenceEngine:
                         }
                         
                         # Pass the specific security_id to physical RAM with 2000 shares
-                        self.bridge.arm_and_fire(security_id=int(sec_id), price=best_ask_price, qty=2000)
+                        self.bridge.arm_and_fire(security_id=int(sec_id), price=best_ask_price, qty=2000, side=SIDE_BUY)
                         await asyncio.sleep(0.1)
                         self.bridge.disarm()
             
