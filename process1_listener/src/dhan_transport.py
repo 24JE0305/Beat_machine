@@ -72,7 +72,11 @@ class DhanTransport:
                 
             header_bytes = frame[offset : offset + header_size]
             msg_len, feed_code, exch_seg, security_id, seq = struct.unpack(header_format, header_bytes)
-            
+
+            # Safeguard against malformed/zero-length packets
+            if msg_len <= 0:
+                break
+
             # Determine side from Feed Code (41 = Bid, 51 = Ask)
             if feed_code == 41:
                 side = "bid"

@@ -2,26 +2,18 @@ import asyncio
 import os
 import time
 import msgpack
-import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import redis.asyncio as aioredis
 from datetime import datetime
 
-# Must match target stocks in Process 2
 TARGET_STOCKS = [
-    "1333",   # HDFC BANK
-    "2885",   # RELIANCE
-    "11536",  # TCS
-    "1594",   # INFOSYS
-    "4963",   # ICICI BANK
-    "3045",   # SBI
-    "3456",   # TATA MOTORS
-    "1922",   # KOTAK MAHINDRA BANK
-    "11483",  # LT
-    "11915",  # YES BANK
+    "1333", "2885", "11536", "1594", "4963", 
+    "3045", "3456", "1922", "11483", "11915"
 ]
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "../data_capture")
-BATCH_SIZE = 1000  # Number of ticks to buffer before writing to disk
+BATCH_SIZE = 1000
 
 class DepthLogger:
     def __init__(self, instrument_ids: list):
@@ -29,52 +21,52 @@ class DepthLogger:
         self.redis = aioredis.from_url("redis://127.0.0.1:6379")
         self.buffer = []
         self.last_blob = {sec_id: None for sec_id in instrument_ids}
+        self.writer = None
+        self.current_file_path = None
         os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     def flatten_snapshot(self, sec_id: str, book_data: dict, timestamp: float) -> dict:
         row = {
             "timestamp": timestamp,
-            "security_id": sec_id,
+            "security_id": int(sec_id),
             "seq": book_data.get("seq", 0)
         }
-        
         bids = book_data.get("bids", [])
         asks = book_data.get("asks", [])
 
-        # Flatten 20 Bid levels
         for i in range(20):
-            if i < len(bids):
-                row[f"bid_px_{i}"] = bids[i][0]
-                row[f"bid_qty_{i}"] = bids[i][1]
-            else:
-                row[f"bid_px_{i}"] = 0.0
-                row[f"bid_qty_{i}"] = 0.0
-
-        # Flatten 20 Ask levels
-        for i in range(20):
-            if i < len(asks):
-                row[f"ask_px_{i}"] = asks[i][0]
-                row[f"ask_qty_{i}"] = asks[i][1]
-            else:
-                row[f"ask_px_{i}"] = 0.0
-                row[f"ask_qty_{i}"] = 0.0
+            row[f"bid_px_{i}"] = bids[i][0] if i < len(bids) else 0.0
+            row[f"bid_qty_{i}"] = bids[i][1] if i < len(bids) else 0.0
+            row[f"ask_px_{i}"] = asks[i][0] if i < len(asks) else 0.0
+            row[f"ask_qty_{i}"] = asks[i][1] if i < len(asks) else 0.0
 
         return row
 
-    def flush_to_disk(self):
-        if not self.buffer:
+    def _write_batch_sync(self, batch_data: list):
+        if not batch_data:
             return
-        df = pd.DataFrame(self.buffer)
+
         date_str = datetime.now().strftime("%Y-%m-%d")
         file_path = os.path.join(OUTPUT_DIR, f"orderbook_depth_{date_str}.parquet")
 
-        if os.path.exists(file_path):
-            existing_df = pd.read_parquet(file_path)
-            df = pd.concat([existing_df, df], ignore_index=True)
+        table = pa.Table.from_pylist(batch_data)
 
-        df.to_parquet(file_path, engine="pyarrow", compression="snappy")
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Flushed {len(self.buffer)} snapshots -> {file_path}")
+        if self.writer is None or self.current_file_path != file_path:
+            if self.writer is not None:
+                self.writer.close()
+            self.current_file_path = file_path
+            self.writer = pq.ParquetWriter(file_path, table.schema, compression="snappy")
+
+        self.writer.write_table(table)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Appended {len(batch_data)} snapshots -> {file_path}")
+
+    async def flush_to_disk(self):
+        if not self.buffer:
+            return
+        batch_to_write = list(self.buffer)
         self.buffer.clear()
+        # Non-blocking async thread dispatch
+        await asyncio.to_thread(self._write_batch_sync, batch_to_write)
 
     async def start_recording(self):
         print(f"Depth Logger running. Monitoring {len(self.instrument_ids)} stocks...")
@@ -90,9 +82,6 @@ class DepthLogger:
                     if stale_flag == b"1" or not book_blob:
                         continue
 
-                    # Compare raw bytes instead of seq (seq is always 0, ignored
-                    # per spec -- deduping on it meant recording one row per
-                    # stock ever, then silently nothing for the rest of the day).
                     if book_blob != self.last_blob[sec_id]:
                         self.last_blob[sec_id] = book_blob
                         book_data = msgpack.unpackb(book_blob, raw=False)
@@ -100,13 +89,15 @@ class DepthLogger:
                         self.buffer.append(row)
 
                         if len(self.buffer) >= BATCH_SIZE:
-                            self.flush_to_disk()
+                            await self.flush_to_disk()
 
-                await asyncio.sleep(0.005)  # Scan every 5ms
+                await asyncio.sleep(0.005)
         except asyncio.CancelledError:
             pass
         finally:
-            self.flush_to_disk()
+            await self.flush_to_disk()
+            if self.writer is not None:
+                self.writer.close()
             await self.redis.aclose()
 
 if __name__ == "__main__":

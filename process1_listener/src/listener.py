@@ -117,7 +117,7 @@ async def run_process1(
                 book.reset_readiness()
 
             health = ConnectionHealth()
-            redis_queue: asyncio.Queue = asyncio.Queue()
+            redis_queue: asyncio.Queue = asyncio.Queue(maxsize=10000)
 
             # Broadcast STALE=True for all tracked instruments immediately
             for inst_id in instruments:

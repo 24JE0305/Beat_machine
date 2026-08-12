@@ -147,11 +147,12 @@ int main()
     volatile ExecutionSignal *signal = static_cast<volatile ExecutionSignal *>(ptr);
     std::cout << "C++ Sniper armed and watching memory block: " << shm_name << std::endl;
 
+    bool order_latched = false;
+
     while (true)
     {
-        if (signal->fire_order)
+        if (signal->fire_order && !order_latched)
         {
-            // Get current time with millisecond precision
             auto now = std::chrono::system_clock::now();
             auto in_time_t = std::chrono::system_clock::to_time_t(now);
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
@@ -160,11 +161,21 @@ int main()
 
             std::cout << "\n[" << std::put_time(std::localtime(&in_time_t), "%H:%M:%S")
                       << "." << std::setfill('0') << std::setw(3) << ms.count() << "] "
-                      << "[PAPER TRADE] " << side_label << " " << signal->target_qty
+                      << "[ORDER FIRED] " << side_label << " " << signal->target_qty
                       << " shares of ID: " << signal->security_id
                       << " at price: " << signal->target_price << std::endl;
 
-            sleep(1);
+            // Execute REST API order asynchronously/synchronously
+            execute_dhan_order(signal->security_id, signal->target_price, signal->target_qty, signal->side);
+
+            // Lock execution until Python explicitly resets fire_order to false
+            order_latched = true;
+        }
+
+        // Reset state latch when Python disarms the shared memory trigger
+        if (!signal->fire_order)
+        {
+            order_latched = false;
         }
 
         if (!signal->is_active)
@@ -173,7 +184,7 @@ int main()
             break;
         }
 
-        usleep(200);
+        usleep(200); // 200 microsecond polling interval
     }
 
     munmap(ptr, sizeof(ExecutionSignal));

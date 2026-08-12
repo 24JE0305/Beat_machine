@@ -12,5 +12,5 @@ pytest-asyncio==1.4.0
 python-dotenv==1.2.2
 redis==8.1.0
 websockets==17.0.1
-pandas==2.2.3
-pyarrow==18.1.0
+pandas
+pyarrow

@@ -22,8 +22,9 @@ class OfflineBacktester:
         return bids, asks
 
     def run(self):
-        position = None  # None or dict
-        cooldown_until = 0
+        # Key positions and cooldowns per security_id to avoid multi-stock cross-contamination
+        positions = {}
+        cooldowns = {}
 
         print(f"Replaying {len(self.df)} recorded orderbook ticks...")
 
@@ -32,8 +33,14 @@ class OfflineBacktester:
             sec_id = str(int(row["security_id"]))
             bids, asks = self.unflatten_row(row)
 
+            # Guard against empty orderbook sides
             if not bids or not asks:
                 continue
+
+            # Initialize tracking dicts for new instruments
+            if sec_id not in positions:
+                positions[sec_id] = None
+                cooldowns[sec_id] = 0.0
 
             # Transform into 64x64 canvas input format
             heatmap = self.transformer.create_heatmap(bids, asks)
@@ -46,13 +53,13 @@ class OfflineBacktester:
             class_scores = ort_outs[0][0][4, :]
             spoof_detected = bool(np.max(class_scores) > 0.85)
 
-            # Check Exit Logic first
+            position = positions[sec_id]
+
+            # 1. Check Exit Logic for THIS specific stock
             if position is not None:
                 time_in_trade = timestamp - position["entry_time"]
                 current_mid = (bids[0][0] + asks[0][0]) / 2.0
                 
-                # Rule 1: Timeout (1.5s)
-                # Rule 2: Wall cancellation/absorption
                 should_exit = False
                 reason = None
 
@@ -77,13 +84,13 @@ class OfflineBacktester:
                         "pnl": pnl,
                         "reason": reason
                     })
-                    position = None
-                    cooldown_until = timestamp + 10.0
+                    positions[sec_id] = None
+                    cooldowns[sec_id] = timestamp + 10.0
                     continue
 
-            # Check Entry Logic if flat
-            if position is None and spoof_detected and timestamp > cooldown_until:
-                position = {
+            # 2. Check Entry Logic for THIS specific stock
+            if positions[sec_id] is None and spoof_detected and timestamp > cooldowns[sec_id]:
+                positions[sec_id] = {
                     "entry_price": asks[0][0],
                     "entry_time": timestamp,
                     "qty": 2000

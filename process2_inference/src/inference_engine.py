@@ -46,33 +46,33 @@ class InferenceEngine:
 
     # >>> NEW: Dedicated Spoof Exit Logic Method
     def check_exit_logic(self, sec_id: str, book_data: dict, current_time: float, spoof_detected: bool) -> tuple[bool, str | None]:
-        """
-        Evaluates whether an active trade should be closed on this tick.
-        """
         pos = self.active_positions[sec_id]
         if pos is None:
             return False, None
 
-        time_in_trade = current_time - pos["entry_time"]
-        bids = book_data["bids"]
-        asks = book_data["asks"]
+        bids = book_data.get("bids", [])
+        asks = book_data.get("asks", [])
 
-        # RULE 1: Time-Decay Timeout (If spoof hasn't moved price within 1.5s, exit)
+        # SAFEGUARD: If book is missing liquidity on either side, postpone exit evaluation
+        if not bids or not asks:
+            return False, None
+
+        time_in_trade = current_time - pos["entry_time"]
+
+        # RULE 1: Time-Decay Timeout
         if time_in_trade > 1.5:
             return True, "TIMEOUT_1500MS"
 
-        # RULE 2: Calculate Top-5 Order Book Imbalance (OBI)
+        # RULE 2: Order Book Imbalance (OBI)
         top_5_bid_vol = sum(b[1] for b in bids[:5])
         top_5_ask_vol = sum(a[1] for a in asks[:5])
         total_vol = (top_5_bid_vol + top_5_ask_vol) or 1
         obi = (top_5_bid_vol - top_5_ask_vol) / total_vol
 
-        # If OBI flips heavily against our Long position, exit immediately
         if pos["side"] == "BUY" and obi < -0.30:
             return True, "OBI_REVERSAL"
 
         # RULE 3: Wall Cancellation vs. Absorption
-        # If YOLOv8 no longer detects the spoof wall, the spoofer either pulled it or it was eaten
         if not spoof_detected:
             current_mid = (bids[0][0] + asks[0][0]) / 2.0
             if current_mid > pos["entry_price"]:
