@@ -15,17 +15,18 @@
 struct ExecutionSignal
 {
     bool fire_order;
-    uint8_t side;         // 0 = BUY, 1 = SELL -- must match memory_bridge.py order exactly
-    uint32_t security_id; // MUST MATCH PYTHON EXACTLY
+    uint8_t side;
+    uint32_t security_id;
     double target_price;
     uint32_t target_qty;
     bool is_active;
+    bool order_acked; // NEW: set True once the sniper has actually processed this signal
 };
 #pragma pack(pop)
 
-// Global variables to hold secure credentials
 std::string dhan_client_id = "";
 std::string dhan_access_token = "";
+bool live_trading_enabled = false; // SAFETY: real orders require an explicit opt-in
 
 void load_env(const std::string &filepath)
 {
@@ -54,6 +55,8 @@ void load_env(const std::string &filepath)
                     dhan_client_id = value;
                 if (key == "DHAN_ACCESS_TOKEN")
                     dhan_access_token = value;
+                if (key == "LIVE_TRADING_ENABLED")
+                    live_trading_enabled = (value == "true" || value == "1");
             }
         }
     }
@@ -159,17 +162,30 @@ int main()
 
             const char *side_label = (signal->side == 1) ? "SELL" : "BUY";
 
-            std::cout << "\n[" << std::put_time(std::localtime(&in_time_t), "%H:%M:%S")
-                      << "." << std::setfill('0') << std::setw(3) << ms.count() << "] "
-                      << "[ORDER FIRED] " << side_label << " " << signal->target_qty
-                      << " shares of ID: " << signal->security_id
-                      << " at price: " << signal->target_price << std::endl;
+            if (live_trading_enabled)
+            {
+                std::cout << "\n[" << std::put_time(std::localtime(&in_time_t), "%H:%M:%S")
+                          << "." << std::setfill('0') << std::setw(3) << ms.count() << "] "
+                          << "[LIVE ORDER FIRED] " << side_label << " " << signal->target_qty
+                          << " shares of ID: " << signal->security_id
+                          << " at price: " << signal->target_price << std::endl;
 
-            // Execute REST API order asynchronously/synchronously
-            execute_dhan_order(signal->security_id, signal->target_price, signal->target_qty, signal->side);
+                execute_dhan_order(signal->security_id, signal->target_price, signal->target_qty, signal->side);
+            }
+            else
+            {
+                std::cout << "\n[" << std::put_time(std::localtime(&in_time_t), "%H:%M:%S")
+                          << "." << std::setfill('0') << std::setw(3) << ms.count() << "] "
+                          << "[PAPER TRADE] " << side_label << " " << signal->target_qty
+                          << " shares of ID: " << signal->security_id
+                          << " at price: " << signal->target_price << std::endl;
+            }
 
             // Lock execution until Python explicitly resets fire_order to false
             order_latched = true;
+
+            // Confirm to Python that we actually read this signal
+            signal->order_acked = true;
         }
 
         // Reset state latch when Python disarms the shared memory trigger

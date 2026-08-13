@@ -98,6 +98,8 @@ class InferenceEngine:
                     
                 # Unpack and transform...
                 book_data = msgpack.unpackb(book_blob, raw=False)
+                if not book_data["bids"] or not book_data["asks"]:
+                    continue
                 heatmap = self.transformer.create_heatmap(book_data["bids"], book_data["asks"])
                 
                 # 1. Create a 64x64 canvas padded with zeros
@@ -127,7 +129,9 @@ class InferenceEngine:
                         # with no side, identical to an entry BUY as far as the
                         # sniper (or any real order placement) could tell.
                         self.bridge.arm_and_fire(security_id=int(sec_id), price=best_bid_price, qty=2000, side=SIDE_SELL)
-                        await asyncio.sleep(0.1)
+                        acked = await self.bridge.wait_for_ack(timeout=0.5)
+                        if not acked:
+                            print(f"[{time.strftime('%H:%M:%S')}] WARNING: sniper did not acknowledge EXIT signal for {sec_id} within 500ms")
                         self.bridge.disarm()
                         
                         # Clear position state
@@ -149,7 +153,9 @@ class InferenceEngine:
                         
                         # Pass the specific security_id to physical RAM with 2000 shares
                         self.bridge.arm_and_fire(security_id=int(sec_id), price=best_ask_price, qty=2000, side=SIDE_BUY)
-                        await asyncio.sleep(0.1)
+                        acked = await self.bridge.wait_for_ack(timeout=0.5)
+                        if not acked:
+                            print(f"[{time.strftime('%H:%M:%S')}] WARNING: sniper did not acknowledge ENTRY signal for {sec_id} within 500ms")
                         self.bridge.disarm()
             
             await asyncio.sleep(0.001)

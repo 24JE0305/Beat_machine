@@ -15,7 +15,8 @@ class ExecutionSignal(ctypes.Structure):
         ("security_id", ctypes.c_uint32),
         ("target_price", ctypes.c_double),  
         ("target_qty", ctypes.c_uint32),    
-        ("is_active", ctypes.c_bool)        
+        ("is_active", ctypes.c_bool),
+        ("order_acked", ctypes.c_bool),     # NEW: sniper sets this True once it has actually read the signal
     ]
 
 class MemoryBridge:
@@ -46,13 +47,26 @@ class MemoryBridge:
         self.signal.target_price = price
         self.signal.target_qty = qty
         self.signal.side = side
+        self.signal.order_acked = False
         self.signal.fire_order = True
+
+    async def wait_for_ack(self, timeout: float = 0.5, poll_interval: float = 0.001) -> bool:
+        """Poll until the C++ sniper confirms it actually read this signal,
+        instead of gambling on a fixed sleep(0.1)."""
+        elapsed = 0.0
+        while elapsed < timeout:
+            if self.signal.order_acked:
+                return True
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+        return False
 
     def disarm(self):
         self.signal.fire_order = False
         self.signal.target_price = 0.0
         self.signal.target_qty = 0
         self.signal.side = SIDE_BUY
+        self.signal.order_acked = False
 
     def deactivate(self):
         """Call on shutdown so the C++ sniper exits cleanly."""
